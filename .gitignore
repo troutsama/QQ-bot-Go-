@@ -1,0 +1,24 @@
+# ── 密钥：只提交 config.example.yaml，真实配置永不入库（03 §5.1）──
+/config.yaml
+
+# ── 运行期数据：SQLite + 日志 + 上传临时文件（03 §4.6 / §5.7）──
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# ── 构建产物 ──
+/bin/
+/botd
+*.exe
+
+# ── 学习笔记（本地自用，不入库）──
+/learn/
+
+# ── macOS ──
+.DS_Store
+
+# ── 编辑器 ──
+.idea/
+*.swp
+*.swo

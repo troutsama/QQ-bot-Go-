@@ -1,0 +1,11 @@
+qq:
+  app_id: 
+  app_secret: 
+
+llm:
+  base_url: 
+  api_key:
+  model:
+  timeout:
+
+  
