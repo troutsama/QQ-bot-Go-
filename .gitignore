@@ -1,0 +1,21 @@
+/config.yaml
+
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# ── 构建产物 ──
+/bin/
+/botd
+*.exe
+
+/learn/
+
+# ── macOS ──
+.DS_Store
+
+# ── 编辑器 ──
+.idea/
+*.swp
+*.swo

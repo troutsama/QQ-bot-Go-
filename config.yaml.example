@@ -1,0 +1,40 @@
+# 复制成 config.yaml 后填写真实值：cp config.yaml.example config.yaml
+# ⚠️ config.yaml 已进 .gitignore，**永远不要提交**它（里面有 AppSecret）。
+
+server:
+  listen: "127.0.0.1:8081"
+  admin_token: "local-dev-token"     # 必填；本地开发用示例值即可，正式部署请换成随机长串
+
+bot:
+  provider: qqbot                    # qqbot | mock（mock = 不连 QQ，只把消息打印到 stdout）
+  qqbot:
+    app_id: ""                       # 必填：QQ 开放平台的 AppID
+    app_secret: ""                   # 必填：AppSecret（只存在本地 config.yaml 里）
+    sandbox: true                    # 沙箱机器人 true / 正式机器人 false —— 填错会「连上但收不到消息」
+
+llm:
+  protocol: fake                     # fake | openai-chat | openai-responses | anthropic
+  base_url: "https://api.deepseek.com/v1"
+  api_key: ""                        # protocol 非 fake 时必填
+  model: "deepseek-chat"
+  system_prompt: "你是一个友好、有帮助的 AI 助手，请用中文回复。"
+  max_tokens: 2048
+  temperature: 0.7
+  timeout: "60s"
+  max_attempts: 3
+
+chat:
+  context_turns: 10
+  context_time_prefix: true
+  timezone: "Asia/Shanghai"
+  max_reply_segments: 3              # 受官方被动回复次数约束（单聊上限 4，留 1 次余量）
+  segment_max_chars: 1500
+
+log:
+  level: info                        # debug | info | warn | error
+  file: "data/logs/botd.log"
+  max_size_mb: 50
+  max_age_days: 7
+
+database:
+  path: "data/bot.db"
