@@ -14,9 +14,9 @@ import (
 	"qq-bot/internal/config"
 )
 
-// 采用 dmbed 注入 sql 文件，需要改动下方的文件名，当前为测试建表文件
+// 采用 dmbed 注入 sql 文件，需要改动下方的文件名
 
-//go:embed test_schema.sql
+//go:embed migrations/0001_init.sql
 var schemaSQL string
 
 type Store struct {
