@@ -37,7 +37,7 @@ type ToolDef struct {
 // 一次模型请求
 type Request struct {
 	System      string
-	Message     []Message
+	Messages    []Message
 	Tools       []ToolDef
 	Model       string
 	MaxTokens   int
@@ -60,7 +60,7 @@ type Usage struct {
 
 type Response struct {
 	Text       string
-	Toolcalls  []ToolCall
+	ToolCalls  []ToolCall
 	StopReason StopReason
 	Usage      Usage
 }
