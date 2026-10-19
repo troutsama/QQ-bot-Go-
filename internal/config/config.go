@@ -63,7 +63,13 @@ type LogConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Driver        string `yaml:"driver"`
+	Path          string `yaml:"path"`
+	DSN           string `yaml:"dsn"`
+	MaxOpenConns  int    `yaml:"max_open_conns"`
+	MaxIdleConns  int    `yaml:"max_idle_conns"`
+	BusyTimeoutMS int    `yaml:"busy_timeout_ms"`
+	InitSchema    bool   `yaml:"init_schema"`
 }
 
 // Load 读取配置。path 为空时按优先级查找（见 resolvePath）。
@@ -116,6 +122,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LLM.Timeout == "" {
 		c.LLM.Timeout = "60s"
+	}
+	if c.Database.Driver == "" {
+		c.Database.Driver = "sqlite"
 	}
 	if c.Database.Path == "" {
 		c.Database.Path = "data/bot.db"
