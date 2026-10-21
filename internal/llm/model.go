@@ -69,7 +69,7 @@ type Response struct {
 }
 
 // 统一端口接口
-type client interface {
+type Client interface {
 	Name() string
 	Complete(ctx context.Context, req Request) (Response, error)
 }
