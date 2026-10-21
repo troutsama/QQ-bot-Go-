@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 type Role string
 
@@ -63,4 +66,10 @@ type Response struct {
 	ToolCalls  []ToolCall
 	StopReason StopReason
 	Usage      Usage
+}
+
+// 统一端口接口
+type client interface {
+	Name() string
+	Complete(ctx context.Context, req Request) (Response, error)
 }
