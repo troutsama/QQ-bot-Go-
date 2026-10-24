@@ -11,8 +11,13 @@
 
 ## 快速开始
 
+开发环境基准为 **Go 1.23.6**，`go.mod` 保持 `go 1.23.6`。直接依赖和间接依赖都必须兼容该版本；升级依赖时不能连带提高 Go 版本要求。升级 Go 工具链须先由作者明确同意，并同步更新本文与 `AGENTS.md`。
+
+先确认本机版本，再使用本机工具链整理依赖，避免自动切换到更高版本掩盖兼容问题：
+
 ```bash
-go mod tidy
+go version                         # 本项目基准：go1.23.6
+GOTOOLCHAIN=local go mod tidy -go=1.23.6
 cp config.yaml.example config.yaml    # 填 bot.qqbot.app_id / app_secret，注意 sandbox 要与 AppID 配套
 go run ./cmd/botd -config config.yaml
 ```
@@ -64,14 +69,16 @@ learn/                   本地学习笔记（不入库）
 
 ## 技术栈与约定
 
-Go 1.23 · [botgo](https://github.com/tencent-connect/botgo) v0.2.1（QQ 官方 SDK）·
+Go 1.23.6 · [botgo](https://github.com/tencent-connect/botgo) v0.2.1（QQ 官方 SDK）·
+`modernc.org/sqlite` v1.38.2（纯 Go SQLite）·
 标准库 `log/slog` · `gopkg.in/yaml.v3` · `gopkg.in/natefinch/lumberjack.v2`
 
 **依赖白名单**：除上面这几个之外一律用标准库（不引 gin/echo、不用 ORM、不用 logrus/zap）。
-完整约定见 [`AGENTS.md`](AGENTS.md) §5。
+完整约定见 [`AGENTS.md`](AGENTS.md) §3。
 
 自查一下手上的代码是不是好的：
 
 ```bash
+export GOTOOLCHAIN=local
 gofmt -l . && go build ./... && go vet ./... && go test ./... -race
 ```

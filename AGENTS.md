@@ -46,6 +46,7 @@
 
 | 主题 | 约定 | 说明与依据 |
 |------|------|----------|
+| **Go 版本** | **开发环境基准 Go 1.23.6，`go.mod` 保持 `go 1.23.6`** | 直接与间接依赖均须兼容 Go 1.23.6；不得因升级依赖提高 Go 要求，也不得添加指向更高版本的 `toolchain` 指令。升级 Go 须由作者明确同意，并同步更新 README 与本文件 |
 | **目录结构** | `cmd/botd` + `internal/{platform,llm,chat,store,config,logx,admin,version}` | 保持端口与适配器分层，核心业务在 `chat` |
 | **依赖方向** | `provider/* → port ← chat`；`store → chat` | 核心业务不依赖具体适配器；`chat` 绝不出现第三方 SDK 字样 |
 | **接口位置** | **接口定义在使用方** | 消费方声明自己需要什么接口，被依赖方只管实现，不导出冗余的大接口 |
@@ -62,6 +63,13 @@
 ## 4. 常用自测与开发命令
 
 ```bash
+# 使用本机 Go 1.23.6，禁止自动切换工具链掩盖版本不兼容
+go version
+export GOTOOLCHAIN=local
+
+# 调整依赖后整理模块；若依赖要求更高 Go 版本，应选兼容版本
+go mod tidy -go=1.23.6
+
 # 代码格式化与静态检查
 gofmt -l -w . && go vet ./...
 
