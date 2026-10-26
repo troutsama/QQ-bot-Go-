@@ -37,7 +37,7 @@ log:
   max_age_days: 7
 
 database:
-  driver: "sqlite"                数据库类型：SQLite 和 MySQL（暂未实现）
+  driver: "sqlite"                # 数据库类型：SQLite 和 MySQL（暂未实现）
   path: "data/bot.db"             # 本地文件路径（driver=sqlite）时生效
   dsn: ""                         # 远程数据库 DSN
   max_open_conns: 1               # 最大连接数

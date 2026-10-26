@@ -48,7 +48,7 @@ func (e *Engine) Run(ctx context.Context, req llm.Request) (llm.Response, error)
 		for _, call := range resp.ToolCalls {
 			output, err := e.registry.Execute(ctx, call)
 			if err != nil {
-				output = fmt.Sprintf("工具： %s  调用出错：%w", call.Name, err)
+				output = fmt.Sprintf("工具： %s  调用出错：%v", call.Name, err)
 			}
 			results = append(results, llm.ToolResult{
 				CallID: call.ID,

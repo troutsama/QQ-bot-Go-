@@ -2,18 +2,51 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug qq-bot",
+            "name": "模型调用：调试 TestComplete（本地模拟服务）",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "debugAdapter": "dlv-dap",
+            "program": "${workspaceFolder}/internal/llm/provider/openaichat",
+            "cwd": "${workspaceFolder}",
+            "args": ["-test.run", "^TestComplete$", "-test.v", "-test.timeout=0"],
+            "env": { "GOTOOLCHAIN": "local" },
+            "stopOnEntry": true
+        },
+        {
+            "name": "主程序：mock + fake（启动流程）",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "${workspaceFolder}/cmd/botd"
+            "debugAdapter": "dlv-dap",
+            "program": "${workspaceFolder}/cmd/botd",
+            "cwd": "${workspaceFolder}",
+            "args": ["-config", "${workspaceFolder}/.vscode/config.debug.yaml"],
+            "env": { "GOTOOLCHAIN": "local" },
+            "stopOnEntry": true
         },
         {
-            "name": "Run qq-bot",
+            "name": "主程序：使用本机 config.yaml（可能连接真实服务）",
             "type": "go",
             "request": "launch",
-            "mode": "auto",
-            "program": "${workspaceFolder}/cmd/botd"
+            "mode": "debug",
+            "debugAdapter": "dlv-dap",
+            "program": "${workspaceFolder}/cmd/botd",
+            "cwd": "${workspaceFolder}",
+            "args": ["-config", "${workspaceFolder}/config.yaml"],
+            "env": { "GOTOOLCHAIN": "local" },
+            "stopOnEntry": true
+        },
+        {
+            "name": "单测：调试当前文件所在包",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "debugAdapter": "dlv-dap",
+            "program": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
+            "args": ["-test.v", "-test.timeout=0"],
+            "env": { "GOTOOLCHAIN": "local" }
         }
     ]
 }

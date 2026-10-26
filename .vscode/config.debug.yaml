@@ -1,0 +1,16 @@
+# 无真实凭据；仅用于跟踪主程序的启动流程。
+server:
+  admin_token: "local-debug-only"
+bot:
+  provider: mock
+llm:
+  protocol: fake
+  timeout: "60s"
+chat:
+  timezone: "Asia/Shanghai"
+log:
+  level: debug
+  file: "data/logs/debug.log"
+database:
+  driver: sqlite
+  path: "data/debug.db"
