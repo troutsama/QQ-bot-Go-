@@ -14,9 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"qq-bot/internal/chat"
 	"qq-bot/internal/config"
 	"qq-bot/internal/logx"
-	"qq-bot/internal/platform"
+	"qq-bot/internal/store"
 	"qq-bot/internal/version"
 
 	// 两个工厂包都叫 factory，必须起别名，否则撞名。
@@ -27,6 +28,7 @@ import (
 func main() {
 	cfgPath := flag.String("config", "", "配置文件路径（默认自动查找 config.yaml）")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
+	migrateStatus := flag.Bool("migrate-status", false, "打印数据库迁移版本后退出（不启动服务）")
 	flag.Parse()
 
 	if *showVersion {
@@ -36,7 +38,7 @@ func main() {
 
 	// 只做三件事：解析 flag → 调 run → 处理退出码。
 	// 业务逻辑一行都不写在这里，这样 run() 才有被测试的可能。
-	if err := run(*cfgPath); err != nil {
+	if err := run(*cfgPath, *migrateStatus); err != nil {
 		// ⚠️ 不用 panic：启动失败要打印一行人能读懂的错，并以退出码 1 结束，
 		// 这样 systemd / launchd 才能正确判断（04 决策表 D-1）。
 		fmt.Fprintln(os.Stderr, "启动失败:", err)
@@ -45,7 +47,7 @@ func main() {
 }
 
 // run 把「启动 → 跑 → 优雅关闭」放在一个函数里，好处是 defer 的作用域清晰。
-func run(cfgPath string) error {
+func run(cfgPath string, migrateStatus bool) error {
 	// ── 1. 配置 ──
 	// 全部从配置文件读，没有环境变量覆盖（见 internal/config 的说明）。
 	cfg, err := config.Load(cfgPath)
@@ -54,6 +56,13 @@ func run(cfgPath string) error {
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
+	}
+
+	// 业务展示时区只在这里加载一次：chat 包不碰 time.Local，
+	// 部署到 UTC 机器也不会让上下文时间前缀整体偏移（R20）。
+	loc, err := time.LoadLocation(cfg.Chat.Timezone)
+	if err != nil {
+		return fmt.Errorf("加载时区 %q 失败: %w", cfg.Chat.Timezone, err)
 	}
 
 	// ── 2. 日志 ──
@@ -79,7 +88,57 @@ func run(cfgPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// ── 4. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
+	// ── 4. 数据库：进程内打开 + 启动时迁移 ──
+	// SQLite 没有服务进程，不存在「先启动数据库」这一步；Open 只连接，
+	// 表结构由 Migrate 按 PRAGMA user_version 推进（03 §5.6）。
+	st, err := store.Open(cfg.Database)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Warn("关闭数据库出错", "error", err)
+		}
+	}()
+
+	// 只读子命令：打印版本后退出，不启动平台连接与业务循环。
+	if migrateStatus {
+		current, err := st.MigrationVersion(ctx)
+		if err != nil {
+			return err
+		}
+		latest, err := st.LatestMigrationVersion()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user_version = %d (target %d)\n", current, latest)
+		return nil
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+	ver, err := st.MigrationVersion(ctx)
+	if err != nil {
+		return err
+	}
+	log.Info("迁移完成", "user_version", ver)
+
+	// ── 4.1 审计事件清理（M1 待办 T5.2）──
+	// 启动时清一次、之后每 24h 一次。协程挂在独立的 ctx 上，退出时先 cancel
+	// 再等它结束 —— 否则它可能正卡在 DELETE 上，和后面的 st.Close() 抢连接。
+	cleanupCtx, stopCleanup := context.WithCancel(ctx)
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		cleanupEvents(cleanupCtx, st, log, eventRetentionDays)
+	}()
+	defer func() {
+		stopCleanup()
+		<-cleanupDone
+	}()
+
+	// ── 5. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
 	provider, err := platformfactory.New(cfg.Bot, log)
 	if err != nil {
 		return err
@@ -90,18 +149,28 @@ func run(cfgPath string) error {
 	}
 	log.Info("适配器就绪", "provider", provider.Name(), "llm", llmClient.Name())
 
-	// ── 5. 连接平台 ──
+	// ── 6. 连接平台 ──
 	if err := provider.Start(ctx); err != nil {
 		return fmt.Errorf("平台连接失败: %w", err)
 	}
 
-	// ── 6. 临时业务：收到什么回什么 ──
-	// 将来这里替换为 chat.New(chat.Deps{Provider: provider, LLM: llmClient, ...}).Run(ctx)（07 M3）。
-	if err := echoLoop(ctx, provider, log); err != nil {
+	// ── 7. 业务服务：去重 → 分片串行 → 上下文 → 模型 → 分段回复 ──
+	// Cfg 传函数而不是值：将来热重载时每条消息都能读到最新快照（M3 只做读取，不接热重载）。
+	svc := chat.New(chat.Deps{
+		Provider: provider,
+		LLM:      llmClient,
+		Store:    st,
+		Cfg:      func() config.Config { return *cfg },
+		Now:      time.Now,
+		Loc:      loc,
+		Log:      log,
+	})
+	if err := svc.Run(ctx); err != nil {
 		return err
 	}
+	log.Info("业务服务已退出")
 
-	// ── 7. 优雅关闭（顺序见 03 §5.8：先停收，再停发，最后关资源）──
+	// ── 8. 优雅关闭（顺序见 03 §5.8：先停收，再停发，最后关资源）──
 	// 关闭走**显式调用**而不是只靠 defer：因为要给它设超时上限。
 	log.Info("开始关闭")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -113,42 +182,35 @@ func run(cfgPath string) error {
 	return nil
 }
 
-// echoLoop 是临时「业务」，唯一目的是证明通信底座通了：
-// ① 事件能收到；② 被动回复凭据（msg_id）能用；③ Send 能真的发出去。
+// eventRetentionDays 是审计事件的保留天数。
+// 暂时硬编码（M1 待办 T5.2）；等 log.event_retention_days 进配置后改为读配置。
+const eventRetentionDays = 14
+
+// cleanupEvents 启动时清理一次过期事件，之后每 24 小时重复一次，直到 ctx 取消。
 //
-// 它会在 M3 被 chat.Service 整体替换，所以刻意写得很薄、不掺业务逻辑。
-func echoLoop(ctx context.Context, p platform.Provider, log *slog.Logger) error {
+// 用 Ticker 而不是 time.After 驱动循环：Ticker 只建一个定时器、反复使用，
+// 而 time.After 每轮都会新建一个 Timer（长时间运行的服务里前者才是惯用法）。
+// 先清理再等待，是为了进程重启后立刻回收上次留下的过期数据。
+func cleanupEvents(ctx context.Context, st *store.Store, log *slog.Logger, retainDays int) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
 	for {
+		n, err := st.CleanupEvents(ctx, retainDays)
+		switch {
+		case err != nil:
+			// 关闭时 ctx 先被取消，查询会跟着失败；这类错误不必刷日志。
+			if ctx.Err() == nil {
+				log.Warn("清理过期事件失败", "error", err)
+			}
+		case n > 0:
+			log.Info("清理过期事件", "deleted", n, "retain_days", retainDays)
+		}
+
 		select {
 		case <-ctx.Done():
-			return nil
-		case msg, ok := <-p.Events():
-			if !ok {
-				return nil // Provider 已关闭事件流
-			}
-			log.Info("收到消息",
-				"conv", msg.Conv.String(),
-				"msg_id", msg.MsgID,
-				"has_attachment", msg.HasAttachment,
-				"text", msg.Text,
-			)
-
-			if msg.Text == "" {
-				continue // 只发了图片/语音，V1 不处理（01 §1.3 的处理表）
-			}
-
-			// ⚠️ 每条入站消息都要**新建**一个 ReplyRef：
-			//    「一次入站消息 → 一个 ReplyRef → 一串递增的 msg_seq」是绑定的一对。
-			reply := platform.NewReplyRef(msg.MsgID, msg.EventID)
-
-			if _, err := p.Send(ctx, platform.OutgoingMessage{
-				Conv:  msg.Conv,
-				Reply: reply,
-				Kind:  platform.OutText,
-				Text:  "你说的是：" + msg.Text,
-			}); err != nil {
-				log.Error("回显失败", "error", err, "msg_id", msg.MsgID)
-			}
+			return
+		case <-ticker.C:
 		}
 	}
 }

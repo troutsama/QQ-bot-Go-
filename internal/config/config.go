@@ -69,7 +69,10 @@ type DatabaseConfig struct {
 	MaxOpenConns  int    `yaml:"max_open_conns"`
 	MaxIdleConns  int    `yaml:"max_idle_conns"`
 	BusyTimeoutMS int    `yaml:"busy_timeout_ms"`
-	InitSchema    bool   `yaml:"init_schema"`
+
+	// Deprecated: 已不再使用。表结构一律由 store.Migrate 按 PRAGMA user_version 推进，
+	// 保留该字段只为让旧配置文件仍能解析。
+	InitSchema bool `yaml:"init_schema"`
 }
 
 // Load 读取配置。path 为空时按优先级查找（见 resolvePath）。
@@ -119,6 +122,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Chat.MaxReplySegments == 0 {
 		c.Chat.MaxReplySegments = 3 // 单聊被动回复上限 4，留 1 次余量（03 §4.4）
+	}
+	if c.Chat.SegmentMaxChars == 0 {
+		c.Chat.SegmentMaxChars = 1500 // 单段上限；Split 内部对 <=0 也有同样的兜底
 	}
 	if c.LLM.Timeout == "" {
 		c.LLM.Timeout = "60s"

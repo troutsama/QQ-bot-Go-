@@ -7,24 +7,21 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "embed"
-
 	_ "modernc.org/sqlite"
 
 	"qq-bot/internal/config"
 )
 
-// 采用 dmbed 注入 sql 文件，需要改动下方的文件名
-
-//go:embed migrations/0001_init.sql
-var schemaSQL string
-
+// Store 是数据持久化适配器。所有 SQL 都封装在本包内，不对上层暴露。
+//
+// 它**不负责建表**：打开连接与推进 schema 是两步（03 §5.6），
+// 建表/升级由调用方显式调用 Migrate 完成。
 type Store struct {
 	db  *sql.DB
 	cfg config.DatabaseConfig
 }
 
-// 初始化，并获取 DB 实例
+// Open 按配置打开数据库并验证连通性；它**不建表**，迁移由 Migrate 负责。
 func Open(cfg config.DatabaseConfig) (*Store, error) {
 	var (
 		db  *sql.DB
@@ -51,19 +48,10 @@ func Open(cfg config.DatabaseConfig) (*Store, error) {
 		return nil, fmt.Errorf("数据库 Ping 失败：%w", err)
 	}
 
-	s := &Store{
+	return &Store{
 		db:  db,
 		cfg: cfg,
-	}
-
-	if cfg.InitSchema {
-		if err := s.InitSchema(context.Background()); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("自动初始化表结构失败：%w", err)
-		}
-	}
-
-	return s, nil
+	}, nil
 }
 
 func openSQLite(cfg config.DatabaseConfig) (*sql.DB, error) {
@@ -87,10 +75,10 @@ func openSQLite(cfg config.DatabaseConfig) (*sql.DB, error) {
 	return sql.Open("sqlite", dsn)
 }
 
-// 执行数据库初始化建表 sql
-func (s *Store) InitSchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("执行 schema.sql 失败: %v", err)
+// Ping 用于启动自检与 admin 健康检查（03 §5.4）。
+func (s *Store) Ping(ctx context.Context) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("数据库不可用: %w", err)
 	}
 	return nil
 }
