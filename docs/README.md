@@ -2,6 +2,9 @@
 
 > 本目录记录 qq-bot-go 的核心架构设计、数据表规划与开发进度。
 > 架构设计摒弃复杂冗余的框架，坚持实用、轻量与原生 Go 风格。
+>
+> **新成员先读根目录 [README](../README.md)**：其中说明当前实现状态、代码阅读顺序和直接写 SQL 的消息入库练习。
+> 本页下方的职责与设计包含未来目标，不代表已经全部实现：`chat` 当前只有类型，Admin 尚未实现，真实 LLM 适配器尚未实现；数据库基础已提供，消息入库留给参与者完成。本阶段直接 SQL 的教学约定优先于长期封装方案。
 
 ---
 
@@ -63,12 +66,16 @@ events (系统运维事件审计)
 
 ```bash
 # 1. 复制配置文件
+# 已有 config.yaml 时不要覆盖；示例现有语法问题与合法最小配置见根 README
 cp config.yaml.example config.yaml
 
-# 2. 本地 Mock 模式验证启动（无需真实 QQ 机器人配置）
+# 2. 先修正本地副本 database.driver 行，并将 bot.provider 改为 mock、llm.protocol 设为 fake
+# Mock 启动只等待事件，不读终端输入；注入与测试方式见根 README
 go run ./cmd/botd -config config.yaml
 
 # 3. 运行静态检查与单测
-gofmt -l -w . && go vet ./...
+gofmt -l . && go vet ./...
 go test -v -race ./...
 ```
+
+已有数据库测试的基线失败、重复建表限制与排查说明见根 [README](../README.md#验证与现有问题)。

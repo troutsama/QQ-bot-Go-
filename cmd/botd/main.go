@@ -57,6 +57,7 @@ func run(cfgPath string) error {
 	}
 
 	// ── 2. 日志 ──
+	// 日志初始化
 	log, closeLog, err := logx.Setup(logx.Config{
 		File:       cfg.Log.File,
 		MaxSizeMB:  cfg.Log.MaxSizeMB,
@@ -78,6 +79,10 @@ func run(cfgPath string) error {
 	// 而且取消会向下传递（token 刷新协程、WS 连接都靠它停）。
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// TODO 数据库初始化
+
+	// TODO 将数据库实例注入到日志系统中
 
 	// ── 4. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
 	provider, err := platformfactory.New(cfg.Bot, log)
