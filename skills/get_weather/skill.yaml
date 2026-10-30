@@ -1,0 +1,13 @@
+name: get_weather
+description: "获取指定位置天气的演示工具，固定返回晴天，不查询实时天气"
+command: "/weather"
+parameters:
+  type: object
+  properties:
+    location:
+      type: string
+      minLength: 1
+      description: "位置，例如湖南长沙，可使用 get_location 的结果"
+  required: [location]
+  additionalProperties: false
+entrypoint: run.js

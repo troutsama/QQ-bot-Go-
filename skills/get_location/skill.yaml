@@ -1,0 +1,8 @@
+name: get_location
+description: "获取当前位置的演示工具，固定返回湖南长沙，不读取真实位置"
+command: "/location"
+parameters:
+  type: object
+  properties: {}
+  additionalProperties: false
+entrypoint: run.py
