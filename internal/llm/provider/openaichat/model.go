@@ -2,6 +2,7 @@ package openaichat
 
 import "encoding/json"
 
+// 发送请求的请求体
 type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`

@@ -13,6 +13,7 @@ const (
 	RoleTool      Role = "tool" // 工具结果
 )
 
+// 中性消息结构
 type Message struct {
 	Role        Role
 	Text        string       // 可为空：若只有工具调用
@@ -20,17 +21,20 @@ type Message struct {
 	ToolResults []ToolResult // role = tool 时的结果
 }
 
+// 模型返回的工具调用指令
 type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments string
 }
 
+// 本地执行工具后的结果
 type ToolResult struct {
 	CallID string
 	Output string
 }
 
+// 工具声明
 type ToolDef struct {
 	Name        string
 	Description string

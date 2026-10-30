@@ -3,6 +3,7 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +14,12 @@ import (
 	"qq-bot/internal/llm"
 )
 
+var live = flag.Bool("live", false, "显式启用真实模型调用（需要本地 config.yaml）")
+
 func TestCompleteLive(t *testing.T) {
+	if !*live {
+		t.Skip("真实模型测试：go test ./internal/llm/provider/openaichat -run TestCompleteLive -args -live")
+	}
 	// 空路径会让配置加载器自动查找项目根目录的 config.yaml。
 	cfg, err := config.Load("")
 	if err != nil {
