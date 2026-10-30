@@ -3,8 +3,8 @@
 **QQ 官方机器人 + AI 对话服务**（Go 版）——一个以「**学会 Go**」为首要目的的个人学习项目，
 从 TypeScript 版 `napcat-platform` 改造而来。
 
-> **现在的状态**：通信底座已跑通（能连 QQ、能收私聊、能回消息），
-> 但**还没接大模型**——所以它目前是个复读机，不是 AI 机器人。
+> **现在的状态**：已接通 QQ 私聊 → OpenAI Chat 模型 → Python 位置 / Node 天气工具 → QQ 回复。
+> 支持有界内存历史、同会话串行化、去重和中文分段；数据库持久化仍待完成。
 > 进度、欠账、下一步见 **[`docs/当前开发进度.md`](docs/当前开发进度.md)**。
 
 ---
@@ -18,12 +18,16 @@
 ```bash
 go version                         # 本项目基准：go1.23.6
 GOTOOLCHAIN=local go mod tidy -go=1.23.6
-cp config.yaml.example config.yaml    # 填 bot.qqbot.app_id / app_secret，注意 sandbox 要与 AppID 配套
+cp config.yaml.example config.yaml    # 填 QQ 凭据及模型 api_key/model/base_url；不要覆盖已有配置
 go run ./cmd/botd -config config.yaml
 ```
 
-不想连 QQ 就先跑假的：把 `config.yaml` 里的 `bot.provider` 改成 `mock`，
-程序会把「本应发出去的消息」打印到 stdout，不联任何网络。
+本机需要 `python3`、`node`。部署时将 `skills/` 与配置文件、二进制一起保留；`tools.directory` 相对配置文件定位。
+在 QQ 私聊发送“我在哪里，那里的天气怎么样？”，模型可依次调用两个工具。它们固定返回湖南长沙和晴天，属于演示数据。
+
+不连接 QQ 时，将 `bot.provider` 改成 `mock`；完全离线还需将 `llm.protocol` 改成 `fake`。
+mock 的消息通过测试注入，不会自动读取终端输入。普通 `fake` 只返回固定文本，不会主动发起工具调用。
+完整配置、运行、离线测试与真实模型工具验收见 [QQ 对话与工具联调](docs/QQ对话与工具联调.md)。
 
 ```bash
 go run ./cmd/botd -version            # 打印版本
@@ -61,10 +65,12 @@ internal/
     factory/                          按配置选 mock / qqbot（唯一 switch）
     provider/mock/                    假平台（单测 + 本地调试用）
     provider/qqbot/                   真 QQ：连接 / 收单聊 / 发单聊 / 接管 SDK 日志
-  llm/                   ② 模型端口（目前只有 fake 实现，三个真实协议待写）
+  llm/                   ② 模型端口（fake、openai-chat、脚本工具加载与多步调用）
+  chat/                  核心服务：分片队列、内存历史、去重与分段回复
   config/ logx/ version/            地基：配置 / 日志 / 版本号
 docs/                    设计文档 + 进度文档
 learn/                   本地学习笔记（不入库）
+skills/                  Python 位置与 Node 天气演示工具（含元数据和单测）
 ```
 
 ---

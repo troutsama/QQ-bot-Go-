@@ -14,7 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"qq-bot/internal/chat"
 	"qq-bot/internal/config"
+	"qq-bot/internal/llm"
+	"qq-bot/internal/llm/tools"
 	"qq-bot/internal/logx"
 	"qq-bot/internal/platform"
 	"qq-bot/internal/version"
@@ -84,71 +87,54 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	llmClient, err := llmfactory.New(cfg.LLM, log)
+	service, err := newChatService(*cfg, provider, log)
 	if err != nil {
 		return err
 	}
-	log.Info("适配器就绪", "provider", provider.Name(), "llm", llmClient.Name())
 
 	// ── 5. 连接平台 ──
 	if err := provider.Start(ctx); err != nil {
 		return fmt.Errorf("平台连接失败: %w", err)
 	}
 
-	// ── 6. 临时业务：收到什么回什么 ──
-	// 将来这里替换为 chat.New(chat.Deps{Provider: provider, LLM: llmClient, ...}).Run(ctx)（07 M3）。
-	if err := echoLoop(ctx, provider, log); err != nil {
-		return err
-	}
-
-	// ── 7. 优雅关闭（顺序见 03 §5.8：先停收，再停发，最后关资源）──
-	// 关闭走**显式调用**而不是只靠 defer：因为要给它设超时上限。
-	log.Info("开始关闭")
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := provider.Stop(shutCtx); err != nil {
-		log.Warn("断开平台出错", "error", err) // 关闭出错也不阻塞退出
-	}
-	log.Info("已退出")
-	return nil
+	// 资源清理覆盖 Service 的所有返回路径；关闭超时不继承已取消的运行 ctx。
+	defer func() {
+		log.Info("开始关闭")
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := provider.Stop(shutCtx); err != nil {
+			log.Warn("断开平台出错", "error", err)
+		}
+		log.Info("已退出")
+	}()
+	return service.Run(ctx)
 }
 
-// echoLoop 是临时「业务」，唯一目的是证明通信底座通了：
-// ① 事件能收到；② 被动回复凭据（msg_id）能用；③ Send 能真的发出去。
-//
-// 它会在 M3 被 chat.Service 整体替换，所以刻意写得很薄、不掺业务逻辑。
-func echoLoop(ctx context.Context, p platform.Provider, log *slog.Logger) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case msg, ok := <-p.Events():
-			if !ok {
-				return nil // Provider 已关闭事件流
-			}
-			log.Info("收到消息",
-				"conv", msg.Conv.String(),
-				"msg_id", msg.MsgID,
-				"has_attachment", msg.HasAttachment,
-				"text", msg.Text,
-			)
-
-			if msg.Text == "" {
-				continue // 只发了图片/语音，V1 不处理（01 §1.3 的处理表）
-			}
-
-			// ⚠️ 每条入站消息都要**新建**一个 ReplyRef：
-			//    「一次入站消息 → 一个 ReplyRef → 一串递增的 msg_seq」是绑定的一对。
-			reply := platform.NewReplyRef(msg.MsgID, msg.EventID)
-
-			if _, err := p.Send(ctx, platform.OutgoingMessage{
-				Conv:  msg.Conv,
-				Reply: reply,
-				Kind:  platform.OutText,
-				Text:  "你说的是：" + msg.Text,
-			}); err != nil {
-				log.Error("回显失败", "error", err, "msg_id", msg.MsgID)
-			}
+// newChatService 属于组合根，集中创建模型、脚本工具和核心业务依赖。
+func newChatService(cfg config.Config, provider platform.Provider, log *slog.Logger) (*chat.Service, error) {
+	client, err := llmfactory.New(cfg.LLM, log)
+	if err != nil {
+		return nil, err
+	}
+	manager := tools.NewSkillManager(cfg.Tools.Directory)
+	if err := manager.Reload(); err != nil {
+		return nil, fmt.Errorf("加载工具: %w", err)
+	}
+	registry := tools.NewRegistry()
+	for _, def := range manager.Defs() {
+		name := def.Name
+		if err := registry.Registry(def, func(ctx context.Context, args string) (string, error) {
+			log.Info("调用工具", "tool", name)
+			started := time.Now()
+			output, err := manager.Execute(ctx, llm.ToolCall{Name: name, Arguments: args})
+			log.Info("工具执行结束", "tool", name, "success", err == nil, "duration_ms", time.Since(started).Milliseconds())
+			return output, err
+		}); err != nil {
+			return nil, fmt.Errorf("注册工具 %s: %w", name, err)
 		}
 	}
+	engine := tools.NewEngine(client, registry, cfg.Tools.MaxSteps)
+	log.Info("适配器就绪", "provider", provider.Name(), "llm", client.Name(), "tools", len(registry.Defs()))
+	cfg.LLM.SystemPrompt += "\n查询当前位置时调用 get_location；查询当前位置天气且用户未指定位置时，先调用 get_location，再将 location 传给 get_weather。工具描述为演示数据时，请说明结果是演示数据。"
+	return chat.New(provider, engine, cfg.LLM, cfg.Chat, log)
 }
