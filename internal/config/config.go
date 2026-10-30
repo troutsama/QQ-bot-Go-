@@ -17,6 +17,12 @@ type Config struct {
 	Chat     ChatConfig     `yaml:"chat"`
 	Log      LogConfig      `yaml:"log"`
 	Database DatabaseConfig `yaml:"database"`
+	Tools    ToolsConfig    `yaml:"tools"`
+}
+
+type ToolsConfig struct {
+	Directory string `yaml:"directory"`
+	MaxSteps  int    `yaml:"max_steps"`
 }
 
 type ServerConfig struct {
@@ -89,6 +95,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: 解析 %s: %w", actual, err)
 	}
 	cfg.applyDefaults()
+	// 外部脚本跟随配置目录，避免从别的目录启动时找不到 skills。
+	if !filepath.IsAbs(cfg.Tools.Directory) {
+		abs, err := filepath.Abs(filepath.Join(filepath.Dir(actual), cfg.Tools.Directory))
+		if err != nil {
+			return nil, fmt.Errorf("config: 定位技能目录: %w", err)
+		}
+		cfg.Tools.Directory = abs
+	}
 	return &cfg, nil
 }
 
@@ -119,6 +133,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Chat.MaxReplySegments == 0 {
 		c.Chat.MaxReplySegments = 3 // 单聊被动回复上限 4，留 1 次余量（03 §4.4）
+	}
+	if c.Chat.SegmentMaxChars == 0 {
+		c.Chat.SegmentMaxChars = 1500
+	}
+	if c.Tools.Directory == "" {
+		c.Tools.Directory = "skills"
+	}
+	if c.Tools.MaxSteps == 0 {
+		c.Tools.MaxSteps = 5
 	}
 	if c.LLM.Timeout == "" {
 		c.LLM.Timeout = "60s"
@@ -162,18 +185,27 @@ func (c *Config) Validate() error {
 	if c.LLM.Protocol != "fake" && c.LLM.BaseURL == "" {
 		problems = append(problems, "llm.base_url 必填")
 	}
+	if c.LLM.Protocol != "fake" && (strings.TrimSpace(c.LLM.APIKey) == "" || strings.TrimSpace(c.LLM.Model) == "") {
+		problems = append(problems, "真实模型的 llm.api_key 与 llm.model 必填")
+	}
 	if c.LLM.Temperature < 0 || c.LLM.Temperature > 2 {
 		// ⚠️ Anthropic 上限是 1；这里只挡住明显非法的值，钳制交给适配器（02 §3.3.2 陷阱 3）
 		problems = append(problems, "llm.temperature 必须在 0–2 之间")
 	}
-	if _, err := time.ParseDuration(c.LLM.Timeout); err != nil {
+	if duration, err := time.ParseDuration(c.LLM.Timeout); err != nil || duration <= 0 {
 		problems = append(problems, fmt.Sprintf("llm.timeout=%q 不是合法时长（例：60s）", c.LLM.Timeout))
 	}
 	if _, err := time.LoadLocation(c.Chat.Timezone); err != nil {
 		problems = append(problems, fmt.Sprintf("chat.timezone=%q 无法加载", c.Chat.Timezone))
 	}
-	if c.Chat.MaxReplySegments > 4 {
+	if c.Chat.MaxReplySegments < 1 || c.Chat.MaxReplySegments > 4 {
 		problems = append(problems, "chat.max_reply_segments 不能超过 4（单聊被动回复次数上限）")
+	}
+	if c.Chat.SegmentMaxChars < 1 || c.Chat.ContextTurns < 1 {
+		problems = append(problems, "chat.segment_max_chars 与 chat.context_turns 必须大于零")
+	}
+	if c.Tools.MaxSteps < 1 {
+		problems = append(problems, "tools.max_steps 必须大于零")
 	}
 	if c.Log.File == "" {
 		problems = append(problems, "log.file 不能为空")
