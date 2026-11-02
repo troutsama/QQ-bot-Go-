@@ -89,11 +89,11 @@ func run(cfgPath string) error {
 	// TODO 将数据库实例注入到日志系统中
 
 	// ── 4. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
-	provider, err := platformfactory.New(cfg.Bot, log)
+	provider, err := platformfactory.New(cfg.Bot, log) // TODO 数据库实例需要注入这里
 	if err != nil {
 		return err
 	}
-	llmClient, err := llmfactory.New(cfg.LLM, log)
+	llmClient, err := llmfactory.New(cfg.LLM, log) // TODO 数据库实例需要注入这里
 	if err != nil {
 		return err
 	}
