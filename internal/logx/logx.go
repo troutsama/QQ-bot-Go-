@@ -1,6 +1,7 @@
 package logx
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,7 +20,14 @@ type Config struct {
 	Console    bool   // 是否同时打到 stdout
 }
 
-func Setup(cfg Config) (*slog.Logger, func() error, error) {
+// Setup 建好「文件 + 控制台」这条日志轨道，再按需挂上下游 handler。
+//
+// extra 是调用方注入的额外下游，目前唯一的用途是 store.NewEventHandler(st)：
+// 让带 kind 属性的业务事件额外写进 events 表（03 §5.7 日志双轨 ——
+// 文件负责排障，DB 负责审计与查询，两者不要混为一谈）。
+//
+// logx 不认识 store，只认识 slog.Handler：具体由谁落库、落到哪，全部在组合根决定。
+func Setup(cfg Config, extra ...slog.Handler) (*slog.Logger, func() error, error) {
 	if cfg.File == "" {
 		return nil, nil, fmt.Errorf("logx: log.file 不能为空")
 	}
@@ -44,12 +52,23 @@ func Setup(cfg Config) (*slog.Logger, func() error, error) {
 
 	level := new(slog.LevelVar)
 	level.Set(ParseLevel(cfg.Level))
-	handler := slog.NewTextHandler(w,
+	var handler slog.Handler = slog.NewTextHandler(w,
 		&slog.HandlerOptions{Level: level})
+	if len(extra) > 0 {
+		handler = multiHandler(append([]slog.Handler{handler}, extra...))
+	}
 	logger := slog.New(handler).With("service", "botd")
 
 	closeFn := func() error {
-		return rotator.Close()
+		var errs []error
+		// 先关下游，再关文件：落库侧若还有缓冲，需要在文件句柄销毁前收尾。
+		for _, h := range extra {
+			if c, ok := h.(io.Closer); ok {
+				errs = append(errs, c.Close())
+			}
+		}
+		errs = append(errs, rotator.Close())
+		return errors.Join(errs...)
 	}
 	return logger, closeFn, nil
 }

@@ -8,6 +8,7 @@ import (
 
 	"qq-bot/internal/config"
 	"qq-bot/internal/platform/provider/mock"
+	"qq-bot/internal/platform/provider/qqbot"
 	"qq-bot/internal/store"
 )
 
@@ -36,9 +37,10 @@ func TestEchoLoopPersist(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// 3. goroutine 跑 echoLoop（日志喂 nil，函数内有兜底）
+	// 3. goroutine 跑业务循环（日志喂 nil，函数内有兜底）
+	//    qqbot.Run 只依赖 platform.Provider 接口和 store，所以能直接拿 mock 假数据跑同一条链路。
 	done := make(chan error, 1)
-	go func() { done <- echoLoop(ctx, p, nil, st) }()
+	go func() { done <- qqbot.Run(ctx, p, st, nil) }()
 
 	// 4. 注入一条入站消息
 	if err := p.Inject(ctx, mock.EnsureEvent("u_test_1", "你好")); err != nil {
