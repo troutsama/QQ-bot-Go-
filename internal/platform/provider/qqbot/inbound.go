@@ -45,3 +45,24 @@ func translateC2C(appID string, d *dto.WSC2CMessageData) (platform.IncomingMessa
 		Raw:           d,
 	}, nil
 }
+func (p *Provider) deliver(msg platform.IncomingMessage) {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed {
+		return
+	}
+	select {
+	case p.events <- msg:
+	case <-p.done:
+	}
+}
+
+func (p *Provider) onC2CMessage(_ *dto.WSPayload, data *dto.WSC2CMessageData) error {
+	msg, err := translateC2C(p.appID, data)
+	if err != nil {
+		p.log.Warn("qqbot：丢弃无法解析的事件", "error", err)
+		return nil
+	}
+	p.deliver(msg)
+	return nil
+}

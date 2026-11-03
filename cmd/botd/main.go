@@ -8,12 +8,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"qq-bot/internal/config"
 	"qq-bot/internal/logx"
-	"qq-bot/internal/platform"
 	"qq-bot/internal/store"
 	"qq-bot/internal/version"
 	"syscall"
@@ -89,7 +87,7 @@ func run(cfgPath string) error {
 	// TODO 将数据库实例注入到日志系统中
 
 	// ── 4. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
-	provider, err := platformfactory.New(cfg.Bot, log) // TODO 数据库实例需要注入这里
+	provider, err := platformfactory.New(cfg.Bot, log, st) // TODO 数据库实例需要注入这里
 	if err != nil {
 		return err
 	}
@@ -104,11 +102,11 @@ func run(cfgPath string) error {
 		return fmt.Errorf("平台连接失败: %w", err)
 	}
 
-	// ── 6. 临时业务：收到什么回什么 ──
-	// 将来这里替换为 chat.New(chat.Deps{Provider: provider, LLM: llmClient, ...}).Run(ctx)（07 M3）。
-	if err := echoLoop(ctx, provider, log, st); err != nil {
-		return err
-	}
+	// ── 6. 等待退出信号 ──
+	// 业务循环已在 provider.Start 内部以 goroutine 跑起来了（Plan A），
+	// main 不再处理消息，只阻塞到 SIGINT/SIGTERM，再走下面的关闭。
+	<-ctx.Done()
+	log.Info("收到退出信号", "signal", ctx.Err())
 
 	// ── 7. 优雅关闭（顺序见 03 §5.8：先停收，再停发，最后关资源）──
 	// 关闭走**显式调用**而不是只靠 defer：因为要给它设超时上限。
@@ -120,84 +118,4 @@ func run(cfgPath string) error {
 	}
 	log.Info("已退出")
 	return nil
-}
-
-// echoLoop 是临时「业务」，唯一目的是证明通信底座通了：
-// ① 事件能收到；② 被动回复凭据（msg_id）能用；③ Send 能真的发出去。
-//
-// 它会在 M3 被 chat.Service 整体替换，所以刻意写得很薄、不掺业务逻辑。
-func echoLoop(ctx context.Context, p platform.Provider, log *slog.Logger, st *store.Store) error {
-	if log == nil {
-		log = slog.Default() // 兜底：便于单测直接喂 nil
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case msg, ok := <-p.Events():
-			if !ok {
-				return nil // Provider 已关闭事件流
-			}
-			log.Info("收到消息",
-				"conv", msg.Conv.String(),
-				"msg_id", msg.MsgID,
-				"text", msg.Text,
-			)
-			if msg.Text == "" {
-				continue // 只发图片/语音，V1 不处理
-			}
-
-			// ① 找房
-			convID, err := st.EnsureConversation(ctx, msg.Conv.AppID, string(msg.Conv.Scene), msg.Conv.SceneID)
-			if err != nil {
-				log.Error("会话入库失败", "error", err, "msg_id", msg.MsgID)
-				continue
-			}
-
-			// ② 开本（幂等）
-			turn, err := st.BeginTurn(ctx, store.TurnParams{
-				ConvID:    convID,
-				MsgID:     msg.MsgID,
-				UserText:  msg.Text,
-				TraceID:   fmt.Sprintf("%x", time.Now().UnixNano()),
-				StartedAt: msg.Timestamp,
-			})
-			if err != nil {
-				log.Error("开轮失败", "error", err, "msg_id", msg.MsgID)
-				continue
-			}
-
-			// ③ 用户那句入库（重复事件不重写）
-			if turn.IsNew {
-				if _, err := st.AppendMessage(ctx, turn.ID, "user", msg.Text); err != nil {
-					log.Error("用户消息入库失败", "error", err, "turn_id", turn.ID)
-				}
-			}
-
-			replyText := "你说的是：" + msg.Text
-
-			// ④ 回复先落库再发送
-			if _, err := st.AppendMessage(ctx, turn.ID, "assistant", replyText); err != nil {
-				log.Error("回复入库失败", "error", err, "turn_id", turn.ID)
-			}
-
-			// ⑤ 发送
-			reply := platform.NewReplyRef(msg.MsgID, msg.EventID)
-			if _, err := p.Send(ctx, platform.OutgoingMessage{
-				Conv:  msg.Conv,
-				Reply: reply,
-				Kind:  platform.OutText,
-				Text:  replyText,
-			}); err != nil {
-				log.Error("回显失败", "error", err, "msg_id", msg.MsgID)
-				if e := st.FinishTurn(ctx, turn.ID, store.StatusFailed, ""); e != nil {
-					log.Error("轮次标记失败", "error", e, "turn_id", turn.ID)
-				}
-			} else {
-				if e := st.FinishTurn(ctx, turn.ID, store.StatusOK, replyText); e != nil {
-					log.Error("轮次收尾失败", "error", e, "turn_id", turn.ID)
-				}
-			}
-		}
-	}
 }

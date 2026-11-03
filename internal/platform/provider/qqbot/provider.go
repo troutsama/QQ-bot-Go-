@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"qq-bot/internal/config"
 	"qq-bot/internal/platform"
+	"qq-bot/internal/store"
 	"sync"
 
 	"github.com/tencent-connect/botgo"
-	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/event"
 	"github.com/tencent-connect/botgo/openapi"
 	"github.com/tencent-connect/botgo/token"
@@ -18,15 +18,24 @@ import (
 
 var _ platform.Provider = (*Provider)(nil)
 
+type MessageStore interface {
+	EnsureConversation(ctx context.Context, appID, scene, sceneID string) (int64, error)
+	BeginTurn(ctx context.Context, p store.TurnParams) (store.TurnRef, error)
+	AppendMessage(ctx context.Context, turnID int64, role, content string) (int64, error)
+	FinishTurn(ctx context.Context, turnID int64, status store.TurnStatus, replyText string) error
+}
+
 type Provider struct {
 	cfg      config.BotConfig
 	appID    string
 	log      *slog.Logger
 	api      openapi.OpenAPI
 	tokenSrc oauth2.TokenSource
+	persist  MessageStore
 
-	events chan platform.IncomingMessage
-	done   chan struct{}
+	events     chan platform.IncomingMessage
+	done       chan struct{}
+	workerDone chan struct{}
 
 	sendMu   sync.RWMutex
 	closed   bool
@@ -35,9 +44,12 @@ type Provider struct {
 	stopOnce sync.Once
 }
 
-func New(cfg config.BotConfig, log *slog.Logger) (*Provider, error) {
+func New(cfg config.BotConfig, log *slog.Logger, persist MessageStore) (*Provider, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if persist == nil {
+		return nil, fmt.Errorf("qqbot: persist 不能为 nil")
 	}
 	q := cfg.QQBot
 	if q.AppID == "" || q.AppSecret == "" {
@@ -63,6 +75,7 @@ func New(cfg config.BotConfig, log *slog.Logger) (*Provider, error) {
 		log:      log,
 		api:      api,
 		tokenSrc: ts,
+		persist:  persist,
 		events:   make(chan platform.IncomingMessage, 256),
 		done:     make(chan struct{}),
 		status:   platform.StatusDisconnected,
@@ -91,7 +104,11 @@ func (p *Provider) Start(ctx context.Context) error {
 		return fmt.Errorf("qqbot：获取 WS 接入点：%w", err)
 	}
 	p.setStatus(platform.StatusConnected)
-
+	p.workerDone = make(chan struct{})
+	go func() {
+		defer close(p.workerDone)
+		p.runOutbound(ctx)
+	}()
 	// 启动会话管理
 	go func() {
 		if err := botgo.NewSessionManager().Start(apInfo, p.tokenSrc, &intents); err != nil {
@@ -110,7 +127,12 @@ func (p *Provider) Stop(ctx context.Context) error {
 		p.closed = true
 		close(p.events)
 		p.sendMu.Unlock()
-
+		if p.workerDone != nil {
+			select {
+			case <-p.workerDone:
+			case <-ctx.Done():
+			}
+		}
 		p.setStatus(platform.StatusDisconnected)
 		p.log.Info("qqbot：已断开")
 	})
@@ -127,26 +149,4 @@ func (p *Provider) setStatus(s platform.Status) {
 	p.mu.Lock()
 	p.status = s
 	p.mu.Unlock()
-}
-
-func (p *Provider) deliver(msg platform.IncomingMessage) {
-	p.sendMu.RLock()
-	defer p.sendMu.RUnlock()
-	if p.closed {
-		return
-	}
-	select {
-	case p.events <- msg:
-	case <-p.done:
-	}
-}
-
-func (p *Provider) onC2CMessage(_ *dto.WSPayload, data *dto.WSC2CMessageData) error {
-	msg, err := translateC2C(p.appID, data)
-	if err != nil {
-		p.log.Warn("qqbot：丢弃无法解析的事件", "error", err)
-		return nil
-	}
-	p.deliver(msg)
-	return nil
 }
