@@ -1,12 +1,53 @@
 package qqbot
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"qq-bot/internal/platform"
 	"time"
 
 	"github.com/tencent-connect/botgo/dto"
 )
+
+const channelPersistenceTimeout = 5 * time.Second
+
+// onC2CMessage 只负责接收、记录和投递，回复内容由 Events 的消费者决定。
+func (p *Provider) onC2CMessage(_ *dto.WSPayload, data *dto.WSC2CMessageData) error {
+	msg, err := translateC2C(p.appID, data)
+	if err != nil {
+		p.log.Warn("qqbot：丢弃无法解析的事件", "error", err)
+		return nil
+	}
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(p.ctx, channelPersistenceTimeout)
+	defer cancel()
+	inserted, err := p.store.RecordChannelMessage(ctx, platform.ChannelMessage{
+		Provider: p.Name(), Conv: msg.Conv, Direction: platform.ChannelIncoming,
+		MsgID: msg.MsgID, SenderOpenID: msg.Sender.OpenID,
+		Kind: "message", Text: msg.Text, HasAttachment: msg.HasAttachment,
+		OccurredAt: msg.Timestamp,
+	})
+	if err != nil {
+		p.log.Error("qqbot：入站消息入库失败，不投递", "error", err, "msg_id", msg.MsgID, "conv", msg.Conv.String())
+		return fmt.Errorf("qqbot: 保存入站消息 %s: %w", msg.MsgID, err)
+	}
+	if !inserted {
+		return nil // 重复平台消息不再次交给业务处理。
+	}
+	select {
+	case p.events <- msg:
+		return nil
+	case <-p.done:
+		return nil
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	}
+}
 
 func translateC2C(appID string, d *dto.WSC2CMessageData) (platform.IncomingMessage, error) {
 	if d == nil {

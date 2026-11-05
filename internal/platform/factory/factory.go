@@ -18,6 +18,7 @@ import (
 	"qq-bot/internal/platform"
 	"qq-bot/internal/platform/provider/mock"
 	"qq-bot/internal/platform/provider/qqbot"
+	"qq-bot/internal/store"
 )
 
 // New 按配置创建 Provider。这是全项目**唯一的 provider switch**。
@@ -36,10 +37,10 @@ import (
 // 一旦写成 if inst != nil { return inst }，它就变成了隐式的全局单例：
 // TestA 拿到的 mock 会被 TestB 复用，t.Parallel() 立刻互相污染。
 // 「全进程只有一份」这件事由组合根（cmd/botd/main.go）保证，不由工厂保证。
-func New(cfg config.BotConfig, log *slog.Logger) (platform.Provider, error) {
+func New(cfg config.BotConfig, log *slog.Logger, st *store.Store) (platform.Provider, error) {
 	switch cfg.Provider {
 	case "qqbot":
-		return qqbot.New(cfg, log)
+		return qqbot.New(cfg, log, st)
 	case "mock":
 		return mock.New(), nil
 	default:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"qq-bot/internal/platform"
+	"time"
 
 	"github.com/tencent-connect/botgo/dto"
 )
@@ -52,6 +53,26 @@ func (p *Provider) Send(ctx context.Context, msg platform.OutgoingMessage) (plat
 		}
 		return platform.SentMessage{}, fmt.Errorf("qqbot: 发送单聊消息: %w", err)
 	}
-	return platform.SentMessage{MsgID: sent.ID, Seq: mc.MsgSeq}, nil
+	result := platform.SentMessage{Seq: mc.MsgSeq}
+	if sent == nil || sent.ID == "" {
+		// API 没有报错，但回执不足以建档；不能把它当作未发送来重试。
+		return result, fmt.Errorf("qqbot: QQ 返回成功但缺少消息 ID: %w", platform.ErrSendUnrecorded)
+	}
+	result.MsgID = sent.ID
+	conv := msg.Conv
+	conv.AppID = p.appID // 记录实际调用 QQ API 的机器人身份。
+	// 网络已经成功，调用方取消不应阻止保存结果；独立设置写库上限。
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), channelPersistenceTimeout)
+	defer cancel()
+	if _, err := p.store.RecordChannelMessage(persistCtx, platform.ChannelMessage{
+		Provider: p.Name(), Conv: conv, Direction: platform.ChannelOutgoing,
+		MsgID: sent.ID, ReplyToMsgID: mc.MsgID, ReplyToEventID: mc.EventID,
+		Seq: mc.MsgSeq, Kind: string(msg.Kind), Text: mc.Content,
+		OccurredAt: time.Now(),
+	}); err != nil {
+		p.log.Error("qqbot：消息已发送但未入库，不重发", "error", err, "sent_msg_id", sent.ID, "conv", conv.String())
+		return result, fmt.Errorf("qqbot: 保存已发送消息 %s: %w: %w", sent.ID, platform.ErrSendUnrecorded, err)
+	}
+	return result, nil
 
 }

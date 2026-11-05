@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"qq-bot/internal/config"
 	"qq-bot/internal/logx"
 	"qq-bot/internal/platform"
+	"qq-bot/internal/store"
 	"qq-bot/internal/version"
 
 	// 两个工厂包都叫 factory，必须起别名，否则撞名。
@@ -79,8 +81,19 @@ func run(cfgPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// 数据库由组合根创建一次，QQ 渠道负责收发消息的落库。
+	st, err := store.Open(cfg.Database)
+	if err != nil {
+		return fmt.Errorf("初始化数据库: %w", err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Warn("关闭数据库失败", "error", err)
+		}
+	}()
+
 	// ── 4. 适配器：全项目唯一的两个 switch，都在工厂包里 ──
-	provider, err := platformfactory.New(cfg.Bot, log)
+	provider, err := platformfactory.New(cfg.Bot, log, st)
 	if err != nil {
 		return err
 	}
@@ -141,12 +154,16 @@ func echoLoop(ctx context.Context, p platform.Provider, log *slog.Logger) error 
 			//    「一次入站消息 → 一个 ReplyRef → 一串递增的 msg_seq」是绑定的一对。
 			reply := platform.NewReplyRef(msg.MsgID, msg.EventID)
 
-			if _, err := p.Send(ctx, platform.OutgoingMessage{
+			if sent, err := p.Send(ctx, platform.OutgoingMessage{
 				Conv:  msg.Conv,
 				Reply: reply,
 				Kind:  platform.OutText,
 				Text:  "你说的是：" + msg.Text,
 			}); err != nil {
+				if errors.Is(err, platform.ErrSendUnrecorded) {
+					log.Error("回显已发送但未入库，不重发", "error", err, "msg_id", msg.MsgID, "sent_msg_id", sent.MsgID)
+					continue
+				}
 				log.Error("回显失败", "error", err, "msg_id", msg.MsgID)
 			}
 		}

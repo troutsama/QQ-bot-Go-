@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"qq-bot/internal/config"
 	"qq-bot/internal/platform"
+	"qq-bot/internal/store"
 	"sync"
 
 	"github.com/tencent-connect/botgo"
-	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/event"
 	"github.com/tencent-connect/botgo/openapi"
 	"github.com/tencent-connect/botgo/token"
@@ -24,6 +24,8 @@ type Provider struct {
 	log      *slog.Logger
 	api      openapi.OpenAPI
 	tokenSrc oauth2.TokenSource
+	store    *store.Store
+	ctx      context.Context
 
 	events chan platform.IncomingMessage
 	done   chan struct{}
@@ -35,9 +37,12 @@ type Provider struct {
 	stopOnce sync.Once
 }
 
-func New(cfg config.BotConfig, log *slog.Logger) (*Provider, error) {
+func New(cfg config.BotConfig, log *slog.Logger, st *store.Store) (*Provider, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if st == nil {
+		return nil, fmt.Errorf("qqbot: 数据库实例不能为空")
 	}
 	q := cfg.QQBot
 	if q.AppID == "" || q.AppSecret == "" {
@@ -63,6 +68,8 @@ func New(cfg config.BotConfig, log *slog.Logger) (*Provider, error) {
 		log:      log,
 		api:      api,
 		tokenSrc: ts,
+		store:    st,
+		ctx:      context.Background(),
 		events:   make(chan platform.IncomingMessage, 256),
 		done:     make(chan struct{}),
 		status:   platform.StatusDisconnected,
@@ -78,6 +85,13 @@ func (p *Provider) Events() <-chan platform.IncomingMessage {
 }
 
 func (p *Provider) Start(ctx context.Context) error {
+	p.sendMu.Lock()
+	if p.closed {
+		p.sendMu.Unlock()
+		return platform.ErrNotConnected
+	}
+	p.ctx = ctx
+	p.sendMu.Unlock()
 	p.setStatus(platform.StatusConnecting)
 
 	if err := token.StartRefreshAccessToken(ctx, p.tokenSrc); err != nil {
@@ -127,26 +141,4 @@ func (p *Provider) setStatus(s platform.Status) {
 	p.mu.Lock()
 	p.status = s
 	p.mu.Unlock()
-}
-
-func (p *Provider) deliver(msg platform.IncomingMessage) {
-	p.sendMu.RLock()
-	defer p.sendMu.RUnlock()
-	if p.closed {
-		return
-	}
-	select {
-	case p.events <- msg:
-	case <-p.done:
-	}
-}
-
-func (p *Provider) onC2CMessage(_ *dto.WSPayload, data *dto.WSC2CMessageData) error {
-	msg, err := translateC2C(p.appID, data)
-	if err != nil {
-		p.log.Warn("qqbot：丢弃无法解析的事件", "error", err)
-		return nil
-	}
-	p.deliver(msg)
-	return nil
 }
