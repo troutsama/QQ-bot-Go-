@@ -12,6 +12,9 @@
 
 /learn/
 
+# 本地 Agent 规划文档
+**/superpowers/
+
 # ── macOS ──
 .DS_Store
 

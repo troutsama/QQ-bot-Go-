@@ -19,6 +19,9 @@ import (
 //go:embed migrations/0001_init.sql
 var schemaSQL string
 
+//go:embed migrations/0002_channel_messages.sql
+var channelSchemaSQL string
+
 type Store struct {
 	db  *sql.DB
 	cfg config.DatabaseConfig
@@ -61,6 +64,11 @@ func Open(cfg config.DatabaseConfig) (*Store, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("自动初始化表结构失败：%w", err)
 		}
+	}
+	// 渠道记录独立于业务表，为已有库补建；DDL 可重复执行。
+	if _, err := db.ExecContext(context.Background(), channelSchemaSQL); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化渠道消息表失败: %w", err)
 	}
 
 	return s, nil
